@@ -1,0 +1,27 @@
+Table elevators {
+  id integer [primary key]
+  address varchar
+  model_type varchar
+  installation_date date
+}
+
+Table mechanics {
+  id integer [primary key]
+  name varchar
+  specialization varchar
+}
+
+Table repairs {
+  id integer [primary key]
+  elevator_id integer
+  mechanic_id integer
+  cost_material decimal
+  cost_labor decimal
+  status varchar // "open", "in_progress", "waiting_for_payment", "done"
+  created_at timestamp
+  updated_at timestamp
+}
+
+// Связи
+Ref: repairs.elevator_id > elevators.id
+Ref: repairs.mechanic_id > mechanics.id
