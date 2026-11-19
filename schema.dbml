@@ -1,27 +1,165 @@
+// ==========================================
+// СИСТЕМА УПРАВЛЕНИЯ ЛИФТОВЫМ ХОЗЯЙСТВОМ
+// Архитектура базы данных (PostgreSQL / SQLite)
+// ==========================================
+
+Project elevator_management_system {
+  database_type: 'PostgreSQL'
+  Note: '''
+    # Информационная система сервисного обслуживания лифтового парка
+    - Учет и паспортизация лифтов, регламенты ТОС
+    - Диспетчерский журнал инцидентов и вызовов (с контролем рецидивов)
+    - Спецификации, сметы, калькуляции и отслеживание статусов документооборота
+    - Прайс-лист запчастей/работ и ступенчатое маржинальное ценообразование
+  '''
+}
+
+// ------------------------------------------
+// СПРАВОЧНИКИ (DICTS & ENUMS)
+// ------------------------------------------
+
+Table dict_issue_types {
+  id integer [pk, increment]
+  name varchar(255) [unique, not null, note: 'Наименование неисправности (Застревание, Не открываются двери и т.д.)']
+  
+  Note: 'Справочник типовых событий/неисправностей'
+}
+
+Table dict_error_codes {
+  id integer [pk, increment]
+  code varchar(50) [unique, not null, note: 'Код ошибки лифтовой станции (DTO, ESB, NAV, DTC, DCP, HAD, DBF и др.)']
+  description text [null, note: 'Расшифровка ошибки']
+
+  Note: 'Справочник кодов ошибок станций управления лифтами'
+}
+
+Table dict_document_statuses {
+  id integer [pk, increment]
+  status_name varchar(150) [unique, not null, note: 'Наименование статуса документа']
+  step_order integer [note: 'Порядковый номер в жизненном цикле согласования (всего 15 состояний)']
+  
+  Note: '15 этапов жизненного цикла комплекта документов (Акт -> Калькуляция -> Спека -> Оплата)'
+}
+
+Table price_items {
+  id integer [pk, increment]
+  item_name varchar(255) [unique, not null, note: 'ПРАЙС: наименование материала или вида работ']
+  purchase_price decimal(12,2) [not null, note: 'Цена закупки / расчет себестоимости работ']
+  selling_price decimal(12,2) [not null, note: 'Цена продажи заказчику (рассчитывается по формуле дифференцированной маржи)']
+  brand varchar(100) [null, note: 'Артикул / заводская марка детали (OTIS, ThyssenKrupp, Fermator и т.д.)']
+  notes text [null, note: 'Дополнительные примечания (например, доп 50, собака)']
+  
+  Note: '''
+    Таблица №4: Исходный каталог запчастей и услуг.
+    Маржинальная накрутка:
+      < 100 руб: +200% (* 3.0)
+      100 - 1 000 руб: +75% (* 1.75)
+      1 000 - 10 000 руб: +50% (* 1.50)
+      10 000 - 100 000 руб: +30% (* 1.30)
+      >= 100 000 руб: +15% (* 1.15)
+  '''
+}
+
+// ------------------------------------------
+// ОСНОВНЫЕ ТАБЛИЦЫ СИСТЕМЫ
+// ------------------------------------------
+
 Table elevators {
-  id integer [primary key]
-  address varchar
-  model_type varchar
-  installation_date date
+  id integer [pk, note: '№ лифта п/п (Primary Key, порядковый номер сквозной до 282+)']
+  address_key varchar(255) [unique, not null, note: 'Бизнес-ключ адреса: Улица, дом, подъезд, "+" для грузовых (1000 кг)']
+  complex_name varchar(150) [not null, note: 'Наименование ЖК']
+  ukm_sector integer [note: 'Номер участка УКМ от заказчика']
+  
+  // Диспетчеризация и связь
+  lb_identifier varchar(50) [null, note: 'Идентификатор ЛБ 7.2']
+  lb_slot_number varchar(50) [null, note: 'Слот / Номер ЛБ (напр. 21/28, 14/1)']
+  connection_comment text [null, note: 'Комментарии по связи (писк при вызове, не работает ггс)']
+  
+  // Технические характеристики
+  elevator_type varchar(50) [note: 'Тип лифта (пассажирский / грузопассажирский / малый / большой)']
+  capacity_kg integer [note: 'Грузоподъемность, кг (400, 1000 и др.)']
+  capacity_persons integer [note: 'Вместимость, чел (от 5 до 13)']
+  stops_count integer [note: 'Количество остановок / этажей']
+  manufacturer varchar(150) [note: 'Завод-изготовитель (ОТИС, SIGMA, ТиссенКрупп и др.)']
+  model varchar(100) [note: 'Модель лифта по паспорту (OTIS 1000R, IRIS1, SYMPLYCITY и т.д.)']
+  model_extra text [note: 'Дополнительная информация по модификации']
+  factory_number varchar(100) [note: 'Заводской серийный номер']
+  reg_number varchar(100) [note: 'Учетный номер Ростехнадзора']
+  commissioning_year integer [note: 'Год ввода в эксплуатацию (для табличек в холлах)']
+  
+  // Регламент ТОС и освидетельствование
+  next_inspection_date date [note: 'Дата следующего технического освидетельствования (ТОсв)']
+  inspection_notes text [note: 'Замечания эксперта по результатам ТОсвид']
+  inspection_execution text [note: 'Фактическое исполнение замечаний механиками']
+  
+  // Геоданные
+  coordinates varchar(100) [note: 'Географические координаты [lat, lon] для карт в Yandex DataLens']
+
+  Note: 'Таблица №1: Паспортный реестр лифтового парка'
 }
 
-Table mechanics {
-  id integer [primary key]
-  name varchar
-  specialization varchar
+Table dispatch_events {
+  id integer [pk, increment]
+  event_date date [not null, note: 'Дата поступления заявки']
+  elevator_id integer [not null, note: 'FK на лифт']
+  issue_type_id integer [not null, note: 'FK на категорию неисправности']
+  error_code_id integer [null, note: 'FK на зафиксированный код ошибки станции']
+  caller_details text [note: 'Уточняющая информация (цитата заявителя: жильца, диспетчера, мастера УК)']
+  resolution text [null, note: 'Итог устранения механиком (пустое значение = заявка в работе, подсвечивается)']
+
+  Note: '''
+    Таблица №2: Журнал диспетчерских событий и аварийных заявок.
+    Включает контроль рецидивов при повторении (elevator_id + issue_type_id).
+  '''
 }
 
-Table repairs {
-  id integer [primary key]
-  elevator_id integer
-  mechanic_id integer
-  cost_material decimal
-  cost_labor decimal
-  status varchar // "open", "in_progress", "waiting_for_payment", "done"
-  created_at timestamp
-  updated_at timestamp
+Table repair_specifications {
+  id integer [pk, increment]
+  spec_number integer [unique, not null, note: 'Порядковый уникальный номер спецификации (Спека)']
+  elevator_id integer [not null, note: 'FK на обслуживаемый лифт']
+  inspection_act_date date [note: 'Дата оформления акта осмотра']
+  calculation_date date [note: 'Дата калькуляции (=РАБДЕНЬ(Дата акта, 1))']
+  spec_date date [null, note: 'Дата спецификации (после подписания Советом дома)']
+  document_status_id integer [not null, note: 'FK на текущий статус комплекта документов']
+  is_prepayment boolean [default: false, note: 'Условие оплаты: предоплата или постоплата']
+  total_customer_cost decimal(12,2) [note: 'Итоговая стоимость ремонта для заказчика']
+  total_purchase_cost decimal(12,2) [note: 'Итоговая себестоимость материалов и работ']
+
+  Note: 'Таблица №3 (шапка): Комплекты документов на ремонты'
 }
 
-// Связи
-Ref: repairs.elevator_id > elevators.id
-Ref: repairs.mechanic_id > mechanics.id
+Table repair_specification_items {
+  id integer [pk, increment]
+  spec_id integer [not null, note: 'FK на родительскую спецификацию']
+  price_item_id integer [not null, note: 'FK на номенклатурную позицию прайса']
+  quantity decimal(10,2) [not null, default: 1, note: 'Количество']
+  unit_price decimal(12,2) [not null, note: 'Цена за единицу (продажа)']
+  total_price decimal(12,2) [not null, note: 'Сумма продажи (Кол-во * Стоимость)']
+  unit_cost decimal(12,2) [not null, note: 'Закупочная цена за единицу']
+  total_cost decimal(12,2) [not null, note: 'Сумма закупки (Кол-во * Закуп)']
+
+  Note: 'Таблица №3 (табличная часть): Конкретные строки сметы/калькуляции к спецификации'
+}
+
+// ------------------------------------------
+// СВЯЗИ МЕЖДУ СУЩНОСТЯМИ (RELATIONSHIPS)
+// ------------------------------------------
+
+// Лифты -> Инциденты (1 : M)
+Ref: elevators.id < dispatch_events.elevator_id [delete: cascade]
+
+// Справочники -> Инциденты (1 : M)
+Ref: dict_issue_types.id < dispatch_events.issue_type_id
+Ref: dict_error_codes.id < dispatch_events.error_code_id
+
+// Лифты -> Спецификации ремонтов (1 : M)
+Ref: elevators.id < repair_specifications.elevator_id
+
+// Статусы документов -> Спецификации ремонтов (1 : M)
+Ref: dict_document_statuses.id < repair_specifications.document_status_id
+
+// Спецификация -> Строки спецификации (1 : M, каскадное удаление)
+Ref: repair_specifications.id < repair_specification_items.spec_id [delete: cascade]
+
+// Прайс-лист -> Строки спецификации (1 : M)
+Ref: price_items.id < repair_specification_items.price_item_id
